@@ -144,18 +144,79 @@ app.post('/api/register', express.json(), async (req, res) => {
   }
 });
 
-function requireRole(role) {
+// Flexible RBAC middleware: accepts a role string or an array of allowed roles
+function requireRole(required) {
   return (req, res, next) => {
     if (!req.session || !req.session.role) return res.status(401).json({ ok: false, error: 'unauthenticated' });
-    if (req.session.role !== role && !(role === 'EDITOR' && req.session.role === 'ADMIN')) {
-      return res.status(403).json({ ok: false, error: 'forbidden' });
-    }
-    next();
+    const userRole = req.session.role;
+    const allowed = Array.isArray(required) ? required : [required];
+    // ADMIN implicitly allowed for most editor-level actions
+    if (allowed.includes(userRole) || userRole === 'ADMIN') return next();
+    return res.status(403).json({ ok: false, error: 'forbidden' });
   };
 }
 
 // Serve the simple admin UI from /admin
 app.use('/admin', express.static(path.join(__dirname, 'admin')));
+
+// Admin: user management endpoints
+const { listUsers, updateUser, deleteUser } = require('./server_helpers');
+
+// List users (ADMIN only)
+app.get('/api/users', requireRole('ADMIN'), async (req, res) => {
+  try {
+    const users = await listUsers();
+    res.json({ ok: true, users });
+  } catch (err) {
+    console.error('GET /api/users error', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// Get a single user: ADMIN or the user themself
+app.get('/api/users/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!req.session || !req.session.userId) return res.status(401).json({ ok: false, error: 'unauthenticated' });
+    if (req.session.role !== 'ADMIN' && req.session.userId !== id) return res.status(403).json({ ok: false, error: 'forbidden' });
+    const user = await getUserById(id);
+    res.json({ ok: true, user });
+  } catch (err) {
+    console.error('GET /api/users/:id error', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// Update a user: ADMIN can update role/displayName/email; users can update their own displayName and email
+app.put('/api/users/:id', express.json(), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!req.session || !req.session.userId) return res.status(401).json({ ok: false, error: 'unauthenticated' });
+    const isAdmin = req.session.role === 'ADMIN';
+    const isSelf = req.session.userId === id;
+    if (!isAdmin && !isSelf) return res.status(403).json({ ok: false, error: 'forbidden' });
+    const payload = req.body || {};
+    // Non-admins cannot change role
+    if (!isAdmin && payload.role) delete payload.role;
+    const result = await updateUser(id, payload);
+    res.json({ ok: true, result });
+  } catch (err) {
+    console.error('PUT /api/users/:id error', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// Delete a user (ADMIN only)
+app.delete('/api/users/:id', requireRole('ADMIN'), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const result = await deleteUser(id);
+    res.json({ ok: true, result });
+  } catch (err) {
+    console.error('DELETE /api/users/:id error', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
 
  async function start() {
   // Initialize Redis client for session store

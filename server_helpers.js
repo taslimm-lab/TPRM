@@ -111,4 +111,44 @@ function getUserById(id) {
   });
 }
 
+function listUsers() {
+  return new Promise((resolve, reject) => {
+    initDb()
+      .then(() => {
+        db.all('SELECT id, email, role, displayName FROM users ORDER BY id ASC', (err, rows) => {
+          if (err) return reject(err);
+          resolve(rows || []);
+        });
+      })
+      .catch(reject);
+  });
+}
+
+function updateUser(id, { email, role, displayName }) {
+  return new Promise((resolve, reject) => {
+    initDb()
+      .then(() => {
+        const stmt = db.prepare('UPDATE users SET email = COALESCE(?, email), role = COALESCE(?, role), displayName = COALESCE(?, displayName) WHERE id = ?');
+        stmt.run(email || null, role || null, displayName || null, id, function (err) {
+          if (err) return reject(err);
+          resolve({ id, changes: this.changes });
+        });
+      })
+      .catch(reject);
+  });
+}
+
+function deleteUser(id) {
+  return new Promise((resolve, reject) => {
+    initDb()
+      .then(() => {
+        db.run('DELETE FROM users WHERE id = ?', [id], function (err) {
+          if (err) return reject(err);
+          resolve({ id, deleted: this.changes > 0 });
+        });
+      })
+      .catch(reject);
+  });
+}
+
 module.exports = { initDb, getMetrics, seedDb, createUser, getUserByEmail, getUserById };
