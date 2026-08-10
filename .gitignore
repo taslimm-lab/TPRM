@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+
+# Node
+node_modules/
+npm-debug.log
+package-lock.json
+yarn.lock
+
+# Env
+.env
+
+# Databases
+*.sqlite
+db.sqlite
+
+# IDE / Editor
+.vscode/
+.idea/
+
+# Logs
+logs/
+*.log
+
+# Build
+dist/
+build/
+
+# Misc
+coverage/

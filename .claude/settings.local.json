@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s \"https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js\" -o /tmp/chart.umd.min.js)",
+      "Bash(ls /Users/tquraishi/Desktop/raaga 2>/dev/null || echo \"Directory does not exist\")",
+      "Read(//Users/tquraishi/Desktop/Raaga/**)"
+    ],
+    "additionalDirectories": [
+      "/Users/tquraishi/Desktop/raaga",
+      "/Users/tquraishi/Desktop/Raaga"
+    ]
+  }
+}
