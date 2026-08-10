@@ -16,28 +16,67 @@
     </div>
 
     <div id="app" style="display:none">
-      <button id="logout">Logout</button>
-      <h3>Metrics</h3>
-      <pre id="metrics"></pre>
-      <h4>Add Metric</h4>
-      <input id="mname" placeholder="name" />
-      <input id="mvalue" placeholder="value" />
-      <button id="add">Add</button>
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h3>Admin Console</h3>
+        <div>
+          <button id="logout">Logout</button>
+        </div>
+      </div>
+
+      <section>
+        <h4>Metrics</h4>
+        <pre id="metrics"></pre>
+        <div style="margin-top:8px">
+          <input id="mname" placeholder="name" />
+          <input id="mvalue" placeholder="value" />
+          <button id="add">Add</button>
+        </div>
+      </section>
+
       <hr />
-      <h3>Users</h3>
-      <div id="usersSection">
-        <button id="refreshUsers">Refresh Users</button>
-        <div id="usersList"></div>
-        <h4>Create User</h4>
-        <input id="newEmail" placeholder="email" />
-        <input id="newPassword" placeholder="password" type="password" />
-        <select id="newRole">
-          <option value="EDITOR">EDITOR</option>
-          <option value="ADMIN">ADMIN</option>
-        </select>
-        <input id="newDisplay" placeholder="displayName" />
-        <button id="createUser">Create</button>
-        <div id="userMsg"></div>
+
+      <section>
+        <h4>Users</h4>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+          <input id="searchUsers" placeholder="Search by email or name" style="flex:1" />
+          <label>Page size:
+            <select id="pageSize"><option>5</option><option selected>10</option><option>20</option></select>
+          </label>
+          <button id="refreshUsers">Refresh</button>
+        </div>
+
+        <div id="usersTable"></div>
+
+        <div id="pagination" style="margin-top:8px"></div>
+
+        <h5 style="margin-top:12px">Create User</h5>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="newEmail" placeholder="email" />
+          <input id="newPassword" placeholder="password" type="password" />
+          <select id="newRole">
+            <option value="EDITOR">EDITOR</option>
+            <option value="ADMIN">ADMIN</option>
+          </select>
+          <input id="newDisplay" placeholder="displayName" />
+          <button id="createUser">Create</button>
+        </div>
+        <div id="userMsg" style="margin-top:6px;color:crimson"></div>
+      </section>
+
+      <!-- Edit modal -->
+      <div id="editModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);align-items:center;justify-content:center">
+        <div style="background:#fff;padding:16px;min-width:320px;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,0.2)">
+          <h4>Edit User</h4>
+          <input id="editEmail" placeholder="email" style="width:100%" />
+          <input id="editDisplay" placeholder="displayName" style="width:100%;margin-top:6px" />
+          <label style="display:block;margin-top:6px">Role:
+            <select id="editRole"><option value="EDITOR">EDITOR</option><option value="ADMIN">ADMIN</option></select>
+          </label>
+          <div style="margin-top:8px;display:flex;gap:8px;justify-content:flex-end">
+            <button id="cancelEdit">Cancel</button>
+            <button id="saveEdit">Save</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -60,49 +99,92 @@
         await api('/api/metrics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,value})});
         loadMetrics();
       }
-      // Users
-      async function loadUsers(){
-        const r = await api('/api/users');
-        if(!r.ok){ document.getElementById('usersList').innerText = r.error || JSON.stringify(r); return; }
-        const users = r.users || [];
-        const container = document.getElementById('usersList');
-        container.innerHTML = '';
-        users.forEach(u=>{
-          const div = document.createElement('div');
-          div.style.border = '1px solid #ddd'; div.style.padding='6px'; div.style.margin='6px 0';
-          div.innerHTML = `<strong>${u.email}</strong> (${u.role}) <br/> <input data-id="${u.id}" class="editDisplay" value="${u.displayName || ''}" /> <button data-id="${u.id}" class="saveUser">Save</button> <button data-id="${u.id}" class="delUser">Delete</button>`;
-          container.appendChild(div);
+      // Users - improved UI with search, pagination and edit modal
+      let usersCache = [];
+      let currentPage = 1;
+      let pageSize = Number(document.getElementById('pageSize').value || 10);
+
+      function renderUsers() {
+        const q = (document.getElementById('searchUsers').value || '').toLowerCase().trim();
+        const filtered = usersCache.filter(u => (u.email||'').toLowerCase().includes(q) || (u.displayName||'').toLowerCase().includes(q));
+        pageSize = Number(document.getElementById('pageSize').value || 10);
+        const total = filtered.length;
+        const pages = Math.max(1, Math.ceil(total / pageSize));
+        if (currentPage > pages) currentPage = pages;
+        const start = (currentPage - 1) * pageSize;
+        const pageItems = filtered.slice(start, start + pageSize);
+
+        const table = document.getElementById('usersTable');
+        table.innerHTML = '';
+        const t = document.createElement('table');
+        t.style.width = '100%';
+        t.style.borderCollapse = 'collapse';
+        t.innerHTML = `<thead><tr><th style="text-align:left">Email</th><th>Display</th><th>Role</th><th>Actions</th></tr></thead>`;
+        const tb = document.createElement('tbody');
+        pageItems.forEach(u => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${u.email}</td><td>${u.displayName || ''}</td><td>${u.role}</td><td><button data-id="${u.id}" class="editBtn">Edit</button> <button data-id="${u.id}" class="delBtn">Delete</button></td>`;
+          tr.style.borderTop = '1px solid #eee';
+          tb.appendChild(tr);
         });
-        // attach handlers
-        Array.from(document.getElementsByClassName('saveUser')).forEach(btn=>{
-          btn.onclick = async (ev)=>{
-            const id = ev.target.getAttribute('data-id');
-            const input = document.querySelector(`input.editDisplay[data-id="${id}"]`);
-            const displayName = input.value;
-            const res = await api('/api/users/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({displayName})});
-            if(res.ok) loadUsers(); else document.getElementById('userMsg').innerText = res.error || JSON.stringify(res);
-          }
-        });
-        Array.from(document.getElementsByClassName('delUser')).forEach(btn=>{
-          btn.onclick = async (ev)=>{
-            const id = ev.target.getAttribute('data-id');
-            if(!confirm('Delete user '+id+'?')) return;
-            const res = await api('/api/users/'+id,{method:'DELETE'});
-            if(res.ok) loadUsers(); else document.getElementById('userMsg').innerText = res.error || JSON.stringify(res);
-          }
+        t.appendChild(tb);
+        table.appendChild(t);
+
+        const pag = document.getElementById('pagination');
+        pag.innerHTML = `<button id="prevPage">Prev</button> <span>Page ${currentPage} / ${pages}</span> <button id="nextPage">Next</button>`;
+        document.getElementById('prevPage').onclick = ()=>{ if(currentPage>1){ currentPage--; renderUsers(); } };
+        document.getElementById('nextPage').onclick = ()=>{ if(currentPage<pages){ currentPage++; renderUsers(); } };
+
+        Array.from(document.getElementsByClassName('editBtn')).forEach(b=> b.onclick = (ev)=>{ openEditModal(Number(ev.target.getAttribute('data-id'))); });
+        Array.from(document.getElementsByClassName('delBtn')).forEach(b=> b.onclick = async (ev)=>{
+          const id = ev.target.getAttribute('data-id');
+          if(!confirm('Delete user '+id+'?')) return;
+          const res = await api('/api/users/'+id,{method:'DELETE',});
+          if(res.ok) { loadUsers(); } else document.getElementById('userMsg').innerText = res.error || JSON.stringify(res);
         });
       }
 
+      async function loadUsers(){
+        const r = await api('/api/users');
+        if(!r.ok){ document.getElementById('usersTable').innerText = r.error || JSON.stringify(r); return; }
+        usersCache = r.users || [];
+        currentPage = 1;
+        renderUsers();
+      }
+
       document.getElementById('refreshUsers').onclick = loadUsers;
+      document.getElementById('searchUsers').oninput = ()=>{ currentPage=1; renderUsers(); };
+      document.getElementById('pageSize').onchange = ()=>{ currentPage=1; renderUsers(); };
+
       document.getElementById('createUser').onclick = async ()=>{
         const email = document.getElementById('newEmail').value;
         const password = document.getElementById('newPassword').value;
         const role = document.getElementById('newRole').value;
         const displayName = document.getElementById('newDisplay').value;
         const res = await api('/api/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password,role,displayName})});
-        if(res.ok){ document.getElementById('userMsg').innerText = 'Created user'; document.getElementById('newEmail').value=''; document.getElementById('newPassword').value=''; loadUsers(); }
-        else document.getElementById('userMsg').innerText = res.error || JSON.stringify(res);
+        if(res.ok){ document.getElementById('userMsg').style.color='green'; document.getElementById('userMsg').innerText = 'Created user'; document.getElementById('newEmail').value=''; document.getElementById('newPassword').value=''; loadUsers(); }
+        else { document.getElementById('userMsg').style.color='crimson'; document.getElementById('userMsg').innerText = res.error || JSON.stringify(res); }
       }
+
+      // Edit modal functions
+      let editingId = null;
+      function openEditModal(id){
+        const u = usersCache.find(x=>x.id===id);
+        if(!u) return;
+        editingId = id;
+        document.getElementById('editEmail').value = u.email || '';
+        document.getElementById('editDisplay').value = u.displayName || '';
+        document.getElementById('editRole').value = u.role || 'EDITOR';
+        document.getElementById('editModal').style.display = 'flex';
+      }
+      document.getElementById('cancelEdit').onclick = ()=>{ document.getElementById('editModal').style.display='none'; editingId=null; };
+      document.getElementById('saveEdit').onclick = async ()=>{
+        if(!editingId) return;
+        const payload = { email: document.getElementById('editEmail').value, displayName: document.getElementById('editDisplay').value, role: document.getElementById('editRole').value };
+        const res = await api('/api/users/'+editingId,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        if(res.ok){ document.getElementById('editModal').style.display='none'; editingId=null; loadUsers(); }
+        else { alert(res.error || JSON.stringify(res)); }
+      };
       // show me if already logged in
       api('/api/me').then(r=>{ if(r.user) { document.getElementById('auth').style.display='none'; document.getElementById('app').style.display='block'; loadMetrics(); } });
       // If logged in, also load users for admins
