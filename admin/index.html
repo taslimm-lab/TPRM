@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Admin</title>
+    <style>body{font-family:Arial;padding:20px}input{margin:4px}</style>
+  </head>
+  <body>
+    <h1>Admin</h1>
+    <div id="auth">
+      <h3>Login</h3>
+      <input id="email" placeholder="email" value="admin@local" />
+      <input id="password" placeholder="password" type="password" value="password" />
+      <button id="login">Login</button>
+      <div id="loginMsg"></div>
+    </div>
+
+    <div id="app" style="display:none">
+      <button id="logout">Logout</button>
+      <h3>Metrics</h3>
+      <pre id="metrics"></pre>
+      <h4>Add Metric</h4>
+      <input id="mname" placeholder="name" />
+      <input id="mvalue" placeholder="value" />
+      <button id="add">Add</button>
+    </div>
+
+    <script>
+      async function api(path, opts={}){
+        const res = await fetch(path, Object.assign({credentials:'same-origin'}, opts));
+        return res.json();
+      }
+      document.getElementById('login').onclick = async ()=>{
+        const email = document.getElementById('email').value;
+        const password = document.getElementById('password').value;
+        const r = await api('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password})});
+        if(r.ok){ document.getElementById('auth').style.display='none'; document.getElementById('app').style.display='block'; loadMetrics(); }
+        else document.getElementById('loginMsg').innerText = r.error || JSON.stringify(r);
+      }
+      document.getElementById('logout').onclick = async ()=>{ await api('/api/logout',{method:'POST'}); location.reload(); }
+      async function loadMetrics(){ const r = await api('/api/metrics'); document.getElementById('metrics').innerText = JSON.stringify(r.metrics, null, 2); }
+      document.getElementById('add').onclick = async ()=>{
+        const name = document.getElementById('mname').value; const value = parseFloat(document.getElementById('mvalue').value||0);
+        await api('/api/metrics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,value})});
+        loadMetrics();
+      }
+      // show me if already logged in
+      api('/api/me').then(r=>{ if(r.user) { document.getElementById('auth').style.display='none'; document.getElementById('app').style.display='block'; loadMetrics(); } });
+    </script>
+  </body>
+</html>

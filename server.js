@@ -7,6 +7,7 @@ const connectRedis = require('connect-redis');
 // const AdminJS = require('adminjs');
 // const AdminJSExpress = require('@adminjs/express');
 const { initDb, getMetrics, seedDb } = require('./server_helpers');
+const { createUser, getUserByEmail, getUserById } = require('./server_helpers');
 
 let redisClient = null;
 
@@ -37,10 +38,81 @@ app.get('/api/metrics', async (req, res) => {
   }
 });
 
-// Admin UI will be added later; placeholder for /admin route
-app.get('/admin', (req, res) => {
-  res.status(200).send('Admin UI temporarily disabled.');
+// Allow creating metrics (protected role: EDITOR or ADMIN)
+app.post('/api/metrics', express.json(), requireRole('EDITOR'), async (req, res) => {
+  try {
+    const { name, value } = req.body || {};
+    if (!name) return res.status(400).json({ ok: false, error: 'missing name' });
+    const ts = Date.now();
+    const sqlite3 = require('sqlite3').verbose();
+    const path = require('path');
+    const dbPath = path.join(__dirname, 'db.sqlite');
+    const tempDb = new sqlite3.Database(dbPath);
+    tempDb.run('INSERT INTO metrics (name, value, ts) VALUES (?, ?, ?)', [name, value || 0, ts], function (err) {
+      if (err) {
+        console.error('Insert metric failed', err);
+        return res.status(500).json({ ok: false, error: String(err) });
+      }
+      res.json({ ok: true, id: this.lastID });
+    });
+  } catch (err) {
+    console.error('POST /api/metrics error', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
 });
+
+// Auth endpoints (local email/password for dev)
+app.post('/api/login', express.json(), async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+    if (!email || !password) return res.status(400).json({ ok: false, error: 'missing credentials' });
+    const user = await getUserByEmail(email);
+    if (!user) return res.status(401).json({ ok: false, error: 'invalid credentials' });
+    const bcrypt = require('bcrypt');
+    const ok = await bcrypt.compare(password, user.password);
+    if (!ok) return res.status(401).json({ ok: false, error: 'invalid credentials' });
+    req.session.userId = user.id;
+    req.session.role = user.role;
+    res.json({ ok: true, user: { id: user.id, email: user.email, role: user.role } });
+  } catch (err) {
+    console.error('POST /api/login error', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+app.post('/api/logout', (req, res) => {
+  req.session.destroy((err) => {
+    if (err) {
+      console.error('Logout failed', err);
+      return res.status(500).json({ ok: false, error: 'logout failed' });
+    }
+    res.json({ ok: true });
+  });
+});
+
+app.get('/api/me', async (req, res) => {
+  try {
+    if (!req.session || !req.session.userId) return res.json({ ok: true, user: null });
+    const user = await getUserById(req.session.userId);
+    res.json({ ok: true, user });
+  } catch (err) {
+    console.error('GET /api/me error', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+function requireRole(role) {
+  return (req, res, next) => {
+    if (!req.session || !req.session.role) return res.status(401).json({ ok: false, error: 'unauthenticated' });
+    if (req.session.role !== role && !(role === 'EDITOR' && req.session.role === 'ADMIN')) {
+      return res.status(403).json({ ok: false, error: 'forbidden' });
+    }
+    next();
+  };
+}
+
+// Serve the simple admin UI from /admin
+app.use('/admin', express.static(path.join(__dirname, 'admin')));
 
  async function start() {
   // Initialize Redis client for session store
