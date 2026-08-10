@@ -151,4 +151,14 @@ function deleteUser(id) {
   });
 }
 
-module.exports = { initDb, getMetrics, seedDb, createUser, getUserByEmail, getUserById };
+module.exports = {
+  initDb,
+  getMetrics,
+  seedDb,
+  createUser,
+  getUserByEmail,
+  getUserById,
+  listUsers,
+  updateUser,
+  deleteUser,
+};

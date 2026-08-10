@@ -32,11 +32,11 @@ if ! echo "$CR" | grep -q '"ok":true'; then
 fi
 
 # extract id
-UID=$(echo "$CR" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')
-echo "[smoke] created user id: $UID"
+NEWUID=$(echo "$CR" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+echo "[smoke] created user id: $NEWUID"
 
-echo "[smoke] Deleting test user id $UID..."
-DEL=$(curl -s -X DELETE "$URL/api/users/$UID" -b "$CJ" 2>/dev/null || true)
+echo "[smoke] Deleting test user id $NEWUID..."
+DEL=$(curl -s -X DELETE "$URL/api/users/$NEWUID" -b "$CJ" 2>/dev/null || true)
 echo "[smoke] delete -> $DEL"
 
 echo "[smoke] Done."
