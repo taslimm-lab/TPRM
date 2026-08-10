@@ -101,6 +101,49 @@ app.get('/api/me', async (req, res) => {
   }
 });
 
+// Registration endpoint: allow creating the first user without auth; afterwards only ADMIN can create users
+app.post('/api/register', express.json(), async (req, res) => {
+  try {
+    const { email, password, role = 'EDITOR', displayName = '' } = req.body || {};
+    if (!email || !password) return res.status(400).json({ ok: false, error: 'missing email or password' });
+
+    // Prevent duplicate accounts
+    const existing = await getUserByEmail(email);
+    if (existing) return res.status(409).json({ ok: false, error: 'user already exists' });
+
+    // Allow creating the very first user (make them ADMIN by default)
+    const firstUser = await (async () => {
+      const sqlite3 = require('sqlite3').verbose();
+      const path = require('path');
+      const dbPath = path.join(__dirname, 'db.sqlite');
+      const tempDb = new sqlite3.Database(dbPath);
+      return new Promise((resolve, reject) => {
+        tempDb.get('SELECT COUNT(1) as c FROM users', (err, row) => {
+          if (err) return reject(err);
+          resolve(!row || row.c === 0);
+        });
+      });
+    })();
+
+    if (!firstUser) {
+      // must be authenticated as ADMIN to create additional users
+      if (!req.session || req.session.role !== 'ADMIN') {
+        return res.status(403).json({ ok: false, error: 'admin required to create users' });
+      }
+    }
+
+    const bcrypt = require('bcrypt');
+    const hash = await bcrypt.hash(password, 10);
+    // If this is the first user, elevate to ADMIN
+    const finalRole = firstUser ? 'ADMIN' : role;
+    const created = await createUser(email, hash, finalRole, displayName);
+    res.json({ ok: true, user: created });
+  } catch (err) {
+    console.error('POST /api/register error', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
 function requireRole(role) {
   return (req, res, next) => {
     if (!req.session || !req.session.role) return res.status(401).json({ ok: false, error: 'unauthenticated' });
