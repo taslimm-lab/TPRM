@@ -24,6 +24,13 @@ echo "[smoke] List users..."
 curl -s -X GET "$URL/api/users" -b "$CJ" | sed -n '1,200p'
 
 echo "[smoke] Create test user..."
+# Remove any existing test user to keep the test idempotent
+EXISTING_ID=$(curl -s -X GET "$URL/api/users" -b "$CJ" | python3 -c "import sys,json; j=json.load(sys.stdin); print(next((str(u['id']) for u in j.get('users',[]) if u.get('email')=='testuser@example.com'),''))" || true)
+if [ -n "$EXISTING_ID" ]; then
+  echo "[smoke] found existing test user id $EXISTING_ID, deleting..."
+  curl -s -X DELETE "$URL/api/users/$EXISTING_ID" -b "$CJ" >/dev/null || true
+fi
+
 CR=$(curl -s -X POST "$URL/api/register" -H 'Content-Type: application/json' -d '{"email":"testuser@example.com","password":"pass","role":"EDITOR","displayName":"Test User"}' -b "$CJ" 2>/dev/null || true)
 echo "[smoke] create -> $CR"
 if ! echo "$CR" | grep -q '"ok":true'; then
