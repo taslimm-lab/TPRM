@@ -33,6 +33,19 @@ export REDIS_URL=redis://127.0.0.1:6379
 npm start
 ```
 
+Production with Docker
+----------------------
+
+Build the image and run with Docker Compose (production):
+
+```bash
+# set a strong SESSION_SECRET first
+export SESSION_SECRET="$(openssl rand -hex 32)"
+docker compose -f docker-compose.prod.yml up --build -d
+```
+
+The SQLite database file is mounted at `./db.sqlite` so data persists on the host.
+
 Endpoints
 - `GET /api/metrics` — returns metrics JSON
 - `POST /api/resume` — (requires Redis) checks session existence; returns 501 if Redis is not configured

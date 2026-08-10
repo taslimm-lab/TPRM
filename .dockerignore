@@ -1,0 +1,12 @@
+node_modules
+.git
+.gitignore
+server.log
+tests
+*.sqlite
+.env
+Dockerfile
+docker-compose.yml
+docker-compose.prod.yml
+.vscode
+coverage
