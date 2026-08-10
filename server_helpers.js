@@ -161,4 +161,27 @@ module.exports = {
   listUsers,
   updateUser,
   deleteUser,
+  // health helpers
+  pingDb: function () {
+    return new Promise((resolve, reject) => {
+      initDb()
+        .then(() => {
+          db.get('SELECT 1 as ok', (err, row) => {
+            if (err) return reject(err);
+            resolve(!!row);
+          });
+        })
+        .catch(reject);
+    });
+  },
+  closeDb: function () {
+    return new Promise((resolve, reject) => {
+      if (!db) return resolve();
+      db.close((err) => {
+        if (err) return reject(err);
+        db = null;
+        resolve();
+      });
+    });
+  },
 };

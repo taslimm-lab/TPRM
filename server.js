@@ -226,7 +226,7 @@ app.delete('/api/users/:id', requireRole('ADMIN'), async (req, res) => {
   }
 });
 
- async function start() {
+async function start() {
   // Initialize Redis client for session store
   const RedisStoreFactory = connectRedis.default || connectRedis;
   const redisUrl = process.env.REDIS_URL;
@@ -291,9 +291,62 @@ app.delete('/api/users/:id', requireRole('ADMIN'), async (req, res) => {
      process.exit(1);
    }
 
-   app.listen(PORT, () => {
+   const server = app.listen(PORT, () => {
      console.log(`Server listening on http://localhost:${PORT}`);
    });
+
+  // Health endpoint
+  app.get('/health', async (req, res) => {
+    try {
+      const dbOk = await require('./server_helpers').pingDb().catch(() => false);
+      let redisOk = 'disabled';
+      if (redisClient) {
+        try {
+          // redis v4 client
+          const pong = await redisClient.ping();
+          redisOk = pong === 'PONG' || !!pong;
+        } catch (e) {
+          redisOk = false;
+        }
+      }
+      res.json({ ok: true, db: !!dbOk, redis: redisOk });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: String(err) });
+    }
+  });
+
+  // Graceful shutdown
+  const { closeDb } = require('./server_helpers');
+  async function shutdown(signal) {
+    try {
+      console.log('Received', signal, 'shutting down...');
+      server.close(async (err) => {
+        if (err) console.error('Server close error', err);
+        try {
+          if (redisClient) {
+            try { await redisClient.quit(); } catch (_) { try { await redisClient.disconnect(); } catch (__) {} }
+            redisClient = null;
+          }
+          await closeDb().catch((e) => console.warn('closeDb failed', e));
+        } finally {
+          process.exit(err ? 1 : 0);
+        }
+      });
+      // Force exit if not closed in time
+      setTimeout(() => {
+        console.error('Forcing shutdown');
+        process.exit(1);
+      }, 10000).unref();
+    } catch (e) {
+      console.error('Shutdown failed', e);
+      process.exit(1);
+    }
+  }
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('uncaughtException', (err) => { console.error('uncaughtException', err); shutdown('uncaughtException'); });
+  process.on('unhandledRejection', (err) => { console.error('unhandledRejection', err); shutdown('unhandledRejection'); });
  }
 
  start().catch((err) => {
