@@ -1,4 +1,6 @@
 const path = require('path');
+// Load environment variables from .env when present
+require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
 const Redis = require('redis');
@@ -16,13 +18,29 @@ const app = express();
 
 app.use(express.json());
 
-app.use(
-  session({
-    secret: process.env.SESSION_SECRET || 'dev-secret',
+function getSessionOptions(store = null) {
+  const isProd = process.env.NODE_ENV === 'production';
+  const secret = process.env.SESSION_SECRET || 'dev-secret';
+  if (isProd && (!secret || secret === 'dev-secret')) {
+    console.warn('WARNING: Running in production without a secure SESSION_SECRET');
+  }
+  const maxAge = parseInt(process.env.SESSION_MAX_AGE || '86400000', 10); // 1 day default
+  return {
+    store,
+    secret,
     resave: false,
     saveUninitialized: false,
-  }),
-);
+    cookie: {
+      secure: isProd, // ensure HTTPS in production
+      httpOnly: true,
+      sameSite: 'lax',
+      maxAge,
+    },
+  };
+}
+
+// initial in-memory session (will be overridden if Redis configured)
+app.use(session(getSessionOptions()));
 
 // Serve static files (existing index.html)
 app.use(express.static(path.join(__dirname)));
@@ -144,17 +162,7 @@ app.post('/api/register', express.json(), async (req, res) => {
   }
 });
 
-// Flexible RBAC middleware: accepts a role string or an array of allowed roles
-function requireRole(required) {
-  return (req, res, next) => {
-    if (!req.session || !req.session.role) return res.status(401).json({ ok: false, error: 'unauthenticated' });
-    const userRole = req.session.role;
-    const allowed = Array.isArray(required) ? required : [required];
-    // ADMIN implicitly allowed for most editor-level actions
-    if (allowed.includes(userRole) || userRole === 'ADMIN') return next();
-    return res.status(403).json({ ok: false, error: 'forbidden' });
-  };
-}
+const { requireRole } = require('./lib/rbac');
 
 // Serve the simple admin UI from /admin
 app.use('/admin', express.static(path.join(__dirname, 'admin')));
