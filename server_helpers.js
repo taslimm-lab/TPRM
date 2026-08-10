@@ -17,6 +17,15 @@ function initDb() {
             ts INTEGER NOT NULL
           )`,
         );
+        db.run(
+          `CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            role TEXT NOT NULL,
+            displayName TEXT
+          )`,
+        );
         db.get('SELECT COUNT(1) as c FROM metrics', (err, row) => {
           if (err) return reject(err);
           if (!row || row.c === 0) {
@@ -61,4 +70,45 @@ function seedDb() {
   });
 }
 
-module.exports = { initDb, getMetrics, seedDb };
+// User helpers
+function createUser(email, passwordHash, role = 'ADMIN', displayName = '') {
+  return new Promise((resolve, reject) => {
+    initDb()
+      .then(() => {
+        const stmt = db.prepare('INSERT OR REPLACE INTO users (email, password, role, displayName) VALUES (?, ?, ?, ?)');
+        stmt.run(email, passwordHash, role, displayName, function (err) {
+          if (err) return reject(err);
+          resolve({ id: this.lastID, email, role, displayName });
+        });
+      })
+      .catch(reject);
+  });
+}
+
+function getUserByEmail(email) {
+  return new Promise((resolve, reject) => {
+    initDb()
+      .then(() => {
+        db.get('SELECT id, email, password, role, displayName FROM users WHERE email = ?', [email], (err, row) => {
+          if (err) return reject(err);
+          resolve(row || null);
+        });
+      })
+      .catch(reject);
+  });
+}
+
+function getUserById(id) {
+  return new Promise((resolve, reject) => {
+    initDb()
+      .then(() => {
+        db.get('SELECT id, email, role, displayName FROM users WHERE id = ?', [id], (err, row) => {
+          if (err) return reject(err);
+          resolve(row || null);
+        });
+      })
+      .catch(reject);
+  });
+}
+
+module.exports = { initDb, getMetrics, seedDb, createUser, getUserByEmail, getUserById };
