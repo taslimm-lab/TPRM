@@ -23,6 +23,22 @@
       <input id="mname" placeholder="name" />
       <input id="mvalue" placeholder="value" />
       <button id="add">Add</button>
+      <hr />
+      <h3>Users</h3>
+      <div id="usersSection">
+        <button id="refreshUsers">Refresh Users</button>
+        <div id="usersList"></div>
+        <h4>Create User</h4>
+        <input id="newEmail" placeholder="email" />
+        <input id="newPassword" placeholder="password" type="password" />
+        <select id="newRole">
+          <option value="EDITOR">EDITOR</option>
+          <option value="ADMIN">ADMIN</option>
+        </select>
+        <input id="newDisplay" placeholder="displayName" />
+        <button id="createUser">Create</button>
+        <div id="userMsg"></div>
+      </div>
     </div>
 
     <script>
@@ -44,8 +60,53 @@
         await api('/api/metrics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,value})});
         loadMetrics();
       }
+      // Users
+      async function loadUsers(){
+        const r = await api('/api/users');
+        if(!r.ok){ document.getElementById('usersList').innerText = r.error || JSON.stringify(r); return; }
+        const users = r.users || [];
+        const container = document.getElementById('usersList');
+        container.innerHTML = '';
+        users.forEach(u=>{
+          const div = document.createElement('div');
+          div.style.border = '1px solid #ddd'; div.style.padding='6px'; div.style.margin='6px 0';
+          div.innerHTML = `<strong>${u.email}</strong> (${u.role}) <br/> <input data-id="${u.id}" class="editDisplay" value="${u.displayName || ''}" /> <button data-id="${u.id}" class="saveUser">Save</button> <button data-id="${u.id}" class="delUser">Delete</button>`;
+          container.appendChild(div);
+        });
+        // attach handlers
+        Array.from(document.getElementsByClassName('saveUser')).forEach(btn=>{
+          btn.onclick = async (ev)=>{
+            const id = ev.target.getAttribute('data-id');
+            const input = document.querySelector(`input.editDisplay[data-id="${id}"]`);
+            const displayName = input.value;
+            const res = await api('/api/users/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({displayName})});
+            if(res.ok) loadUsers(); else document.getElementById('userMsg').innerText = res.error || JSON.stringify(res);
+          }
+        });
+        Array.from(document.getElementsByClassName('delUser')).forEach(btn=>{
+          btn.onclick = async (ev)=>{
+            const id = ev.target.getAttribute('data-id');
+            if(!confirm('Delete user '+id+'?')) return;
+            const res = await api('/api/users/'+id,{method:'DELETE'});
+            if(res.ok) loadUsers(); else document.getElementById('userMsg').innerText = res.error || JSON.stringify(res);
+          }
+        });
+      }
+
+      document.getElementById('refreshUsers').onclick = loadUsers;
+      document.getElementById('createUser').onclick = async ()=>{
+        const email = document.getElementById('newEmail').value;
+        const password = document.getElementById('newPassword').value;
+        const role = document.getElementById('newRole').value;
+        const displayName = document.getElementById('newDisplay').value;
+        const res = await api('/api/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password,role,displayName})});
+        if(res.ok){ document.getElementById('userMsg').innerText = 'Created user'; document.getElementById('newEmail').value=''; document.getElementById('newPassword').value=''; loadUsers(); }
+        else document.getElementById('userMsg').innerText = res.error || JSON.stringify(res);
+      }
       // show me if already logged in
       api('/api/me').then(r=>{ if(r.user) { document.getElementById('auth').style.display='none'; document.getElementById('app').style.display='block'; loadMetrics(); } });
+      // If logged in, also load users for admins
+      api('/api/me').then(r=>{ if(r.user && r.user.role==='ADMIN') loadUsers(); });
     </script>
   </body>
 </html>
