@@ -8,8 +8,23 @@ const connectRedis = require('connect-redis');
 // AdminJS disabled for now to avoid package export issues on Node v24
 // const AdminJS = require('adminjs');
 // const AdminJSExpress = require('@adminjs/express');
-const { initDb, getMetrics, seedDb } = require('./server_helpers');
-const { createUser, getUserByEmail, getUserById } = require('./server_helpers');
+const {
+  initDb,
+  getMetrics,
+  seedDb,
+  createUser,
+  getUserByEmail,
+  getUserById,
+  listUsers,
+  updateUser,
+  deleteUser,
+  logAudit,
+  getAudits,
+  // permissions helpers will be used later via require('./server_helpers')
+} = require('./server_helpers');
+
+const { requireRole, requirePermission } = require('./lib/rbac');
+
 
 let redisClient = null;
 
@@ -17,6 +32,9 @@ const PORT = process.env.PORT || 3000;
 const app = express();
 
 app.use(express.json());
+// Passport for OAuth
+const passport = require('passport');
+const GitHubStrategy = require('passport-github2').Strategy;
 
 function getSessionOptions(store = null) {
   const isProd = process.env.NODE_ENV === 'production';
@@ -71,6 +89,7 @@ app.post('/api/metrics', express.json(), requireRole('EDITOR'), async (req, res)
         console.error('Insert metric failed', err);
         return res.status(500).json({ ok: false, error: String(err) });
       }
+      (async () => { try { await logAudit(req.session && req.session.userId, 'create_metric', 'metric', JSON.stringify({ id: this.lastID, name, value })); } catch (e) { console.warn('audit metric failed', e); } })();
       res.json({ ok: true, id: this.lastID });
     });
   } catch (err) {
@@ -91,6 +110,7 @@ app.post('/api/login', express.json(), async (req, res) => {
     if (!ok) return res.status(401).json({ ok: false, error: 'invalid credentials' });
     req.session.userId = user.id;
     req.session.role = user.role;
+    try { await logAudit(user.id, 'login', 'user', JSON.stringify({ email })); } catch (e) { console.warn('audit login failed', e); }
     res.json({ ok: true, user: { id: user.id, email: user.email, role: user.role } });
   } catch (err) {
     console.error('POST /api/login error', err);
@@ -99,11 +119,13 @@ app.post('/api/login', express.json(), async (req, res) => {
 });
 
 app.post('/api/logout', (req, res) => {
+  const actor = req.session && req.session.userId;
   req.session.destroy((err) => {
     if (err) {
       console.error('Logout failed', err);
       return res.status(500).json({ ok: false, error: 'logout failed' });
     }
+    (async () => { try { await logAudit(actor, 'logout', 'user'); } catch (e) { /* ignore */ } })();
     res.json({ ok: true });
   });
 });
@@ -155,6 +177,7 @@ app.post('/api/register', express.json(), async (req, res) => {
     // If this is the first user, elevate to ADMIN
     const finalRole = firstUser ? 'ADMIN' : role;
     const created = await createUser(email, hash, finalRole, displayName);
+    try { await logAudit(req.session && req.session.userId, 'create_user', 'user', JSON.stringify({ id: created.id, email })); } catch (e) { console.warn('audit create user failed', e); }
     res.json({ ok: true, user: created });
   } catch (err) {
     console.error('POST /api/register error', err);
@@ -162,13 +185,10 @@ app.post('/api/register', express.json(), async (req, res) => {
   }
 });
 
-const { requireRole } = require('./lib/rbac');
-
 // Serve the simple admin UI from /admin
 app.use('/admin', express.static(path.join(__dirname, 'admin')));
 
 // Admin: user management endpoints
-const { listUsers, updateUser, deleteUser } = require('./server_helpers');
 
 // List users (ADMIN only)
 app.get('/api/users', requireRole('ADMIN'), async (req, res) => {
@@ -207,6 +227,7 @@ app.put('/api/users/:id', express.json(), async (req, res) => {
     // Non-admins cannot change role
     if (!isAdmin && payload.role) delete payload.role;
     const result = await updateUser(id, payload);
+    try { await logAudit(req.session && req.session.userId, 'update_user', 'user', JSON.stringify({ id, payload })); } catch (e) { console.warn('audit update user failed', e); }
     res.json({ ok: true, result });
   } catch (err) {
     console.error('PUT /api/users/:id error', err);
@@ -219,9 +240,114 @@ app.delete('/api/users/:id', requireRole('ADMIN'), async (req, res) => {
   try {
     const id = Number(req.params.id);
     const result = await deleteUser(id);
+    try { await logAudit(req.session && req.session.userId, 'delete_user', 'user', JSON.stringify({ id })); } catch (e) { console.warn('audit delete user failed', e); }
     res.json({ ok: true, result });
   } catch (err) {
     console.error('DELETE /api/users/:id error', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// Audit endpoints
+app.get('/api/audit', requireRole('ADMIN'), async (req, res) => {
+  try {
+    // support optional query params: limit, actorId, action, resource
+    const limit = Math.min(parseInt(req.query.limit || '200', 10), 1000);
+    const actorId = req.query.actorId ? Number(req.query.actorId) : null;
+    const action = req.query.action || null;
+    const resource = req.query.resource || null;
+    let audits = await getAudits(limit);
+    if (actorId) audits = audits.filter(a => a.actorId === actorId);
+    if (action) audits = audits.filter(a => a.action === action);
+    if (resource) audits = audits.filter(a => a.resource === resource);
+    res.json({ ok: true, audits });
+  } catch (err) {
+    console.error('GET /api/audit error', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+app.get('/api/audit/user/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!req.session || !req.session.userId) return res.status(401).json({ ok: false, error: 'unauthenticated' });
+    if (req.session.role !== 'ADMIN' && req.session.userId !== id) return res.status(403).json({ ok: false, error: 'forbidden' });
+    const all = await getAudits(1000);
+    const filtered = all.filter(a => a.actorId === id);
+    res.json({ ok: true, audits: filtered });
+  } catch (err) {
+    console.error('GET /api/audit/user/:id error', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// Permissions management (ADMIN)
+app.get('/api/permissions', requireRole('ADMIN'), async (req, res) => {
+  try {
+    const perms = await require('./server_helpers').listPermissions();
+    res.json({ ok: true, permissions: perms });
+  } catch (err) {
+    console.error('GET /api/permissions error', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+app.post('/api/permissions', requireRole('ADMIN'), express.json(), async (req, res) => {
+  try {
+    const { resource, action, role, userId, allow } = req.body || {};
+    if (!resource || !action) return res.status(400).json({ ok: false, error: 'missing resource or action' });
+    const perm = await require('./server_helpers').createPermission({ resource, action, role: role || null, userId: userId ? Number(userId) : null, allow: allow ? 1 : 0 });
+    try { await logAudit(req.session && req.session.userId, 'create_permission', 'permission', JSON.stringify(perm)); } catch (e) { console.warn('audit create permission failed', e); }
+    res.json({ ok: true, permission: perm });
+  } catch (err) {
+    console.error('POST /api/permissions error', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+app.delete('/api/permissions/:id', requireRole('ADMIN'), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const result = await require('./server_helpers').deletePermission(id);
+    try { await logAudit(req.session && req.session.userId, 'delete_permission', 'permission', JSON.stringify({ id })); } catch (e) { console.warn('audit delete permission failed', e); }
+    res.json({ ok: true, result });
+  } catch (err) {
+    console.error('DELETE /api/permissions/:id error', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// Bulk replace role-based permissions for resource/action
+app.post('/api/permissions/bulk', requireRole('ADMIN'), express.json(), async (req, res) => {
+  try {
+    const { entries } = req.body || {};
+    if (!Array.isArray(entries)) return res.status(400).json({ ok: false, error: 'entries array required' });
+    const helpers = require('./server_helpers');
+    // Group entries by resource+action
+    const byKey = {};
+    entries.forEach(e => {
+      const r = e.resource, a = e.action;
+      const k = `${r}||${a}`;
+      byKey[k] = byKey[k] || { resource: r, action: a, items: [] };
+      byKey[k].items.push(e);
+    });
+    const results = [];
+    for (const k of Object.keys(byKey)) {
+      const group = byKey[k];
+      // delete existing role-based perms for this resource/action
+      await helpers.deletePermissionsFor(group.resource, group.action);
+      // create new role perms
+      for (const it of group.items) {
+        if (it.role) {
+          const created = await helpers.createPermission({ resource: group.resource, action: group.action, role: it.role, allow: it.allow ? 1 : 0 });
+          results.push(created);
+        }
+      }
+    }
+    try { await logAudit(req.session && req.session.userId, 'bulk_update_permissions', 'permission', JSON.stringify({ count: results.length })); } catch (e) { console.warn('audit bulk perms failed', e); }
+    res.json({ ok: true, created: results.length, details: results });
+  } catch (err) {
+    console.error('POST /api/permissions/bulk error', err);
     res.status(500).json({ ok: false, error: String(err) });
   }
 });
@@ -258,6 +384,84 @@ async function start() {
       cookie: { secure: false },
     }),
   );
+
+  // initialize passport (relies on sessions)
+  app.use(passport.initialize());
+  app.use(passport.session());
+
+  // Passport serialize/deserialize using our users table
+  passport.serializeUser((user, done) => {
+    done(null, user && user.id);
+  });
+  passport.deserializeUser(async (id, done) => {
+    try {
+      const u = await getUserById(id);
+      done(null, u || null);
+    } catch (e) {
+      done(e);
+    }
+  });
+
+  // Configure GitHub strategy if env is present
+  const GITHUB_ID = process.env.GITHUB_CLIENT_ID;
+  const GITHUB_SECRET = process.env.GITHUB_CLIENT_SECRET;
+  const baseUrl = process.env.BASE_URL || `http://localhost:${PORT}`;
+  if (GITHUB_ID && GITHUB_SECRET) {
+    passport.use(
+      new GitHubStrategy(
+        { clientID: GITHUB_ID, clientSecret: GITHUB_SECRET, callbackURL: `${baseUrl}/auth/github/callback`, scope: ['user:email'] },
+        async (accessToken, refreshToken, profile, done) => {
+          try {
+            const provider = 'github';
+            const providerId = profile.id && String(profile.id);
+            const helpers = require('./server_helpers');
+            // try to find a user linked to this providerId
+            const linkedUserId = await helpers.findUserByProvider(provider, providerId);
+            if (linkedUserId) {
+              const user = await getUserById(linkedUserId);
+              return done(null, user);
+            }
+            // fallback to email match
+            const email = (profile.emails && profile.emails[0] && profile.emails[0].value) || `${profile.username}@github`;
+            let user = await getUserByEmail(email);
+            if (!user) {
+              // create a user with temporary password hash
+              const bcrypt = require('bcrypt');
+              const hash = await bcrypt.hash(accessToken.slice(0, 20) || Math.random().toString(36), 10);
+              await createUser(email, hash, 'EDITOR', profile.displayName || profile.username);
+              user = await getUserByEmail(email);
+            }
+            // link oauth account for future logins
+            try { await helpers.linkOAuthAccount(provider, providerId, user.id); } catch (e) { console.warn('linkOAuth failed', e); }
+            return done(null, user);
+          } catch (e) {
+            done(e);
+          }
+        },
+      ),
+    );
+
+    // OAuth routes
+    app.get('/auth/github', passport.authenticate('github', { scope: ['user:email'] }));
+
+    app.get('/auth/github/callback', passport.authenticate('github', { failureRedirect: '/?auth=failed' }), async (req, res) => {
+      try {
+        // after passport verify, req.user is set
+        if (req.user) {
+          req.session.userId = req.user.id;
+          req.session.role = req.user.role;
+          try { await logAudit(req.user.id, 'oauth_login', 'user', JSON.stringify({ provider: 'github', id: req.user.id })); } catch (e) { /* ignore */ }
+        }
+        res.redirect('/admin');
+      } catch (e) {
+        console.error('OAuth callback error', e);
+        res.redirect('/?auth=error');
+      }
+    });
+    console.log('GitHub OAuth enabled (routes /auth/github and /auth/github/callback)');
+  } else {
+    console.log('GITHUB_CLIENT_ID/SECRET not set — GitHub OAuth disabled');
+  }
 
    // Resume endpoint to check session existence in Redis (helps handle unknown-session errors)
   app.post('/api/resume', express.json(), async (req, res) => {

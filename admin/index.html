@@ -12,6 +12,7 @@
       <input id="email" placeholder="email" value="admin@local" />
       <input id="password" placeholder="password" type="password" value="password" />
       <button id="login">Login</button>
+      <a href="/auth/github" style="margin-left:8px"><button id="githubLogin">Login with GitHub</button></a>
       <div id="loginMsg"></div>
     </div>
 
@@ -34,6 +35,36 @@
       </section>
 
       <hr />
+
+      <section>
+        <h4>Permissions</h4>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+          <button id="refreshPerms">Refresh</button>
+          <span style="color:#666">Manage per-resource actions and role/user overrides</span>
+        </div>
+        <div id="permsTable"></div>
+        <h5 style="margin-top:12px">Create Permission</h5>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="permResource" placeholder="resource (e.g., /api/metrics or metrics)" />
+          <input id="permAction" placeholder="action (e.g., create, read)" />
+          <input id="permRole" placeholder="role (optional)" />
+          <input id="permUserId" placeholder="userId (optional)" style="width:80px" />
+          <label style="display:flex;align-items:center">Allow: <input id="permAllow" type="checkbox" checked style="margin-left:6px" /></label>
+          <button id="createPerm">Create</button>
+        </div>
+        <div id="permMsg" style="margin-top:6px;color:crimson"></div>
+      </section>
+
+      <hr />
+
+      <section>
+        <h4>Permission Matrix</h4>
+        <div style="color:#666;margin-bottom:8px">Toggle default role permissions per resource/action. Click Apply to save changes.</div>
+        <div id="permMatrix"></div>
+        <div style="margin-top:8px">
+          <button id="applyMatrix">Apply Matrix</button>
+        </div>
+      </section>
 
       <section>
         <h4>Users</h4>
@@ -61,6 +92,24 @@
           <button id="createUser">Create</button>
         </div>
         <div id="userMsg" style="margin-top:6px;color:crimson"></div>
+      </section>
+
+      <hr />
+
+      <section>
+        <h4>Audit Logs</h4>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+            <button id="refreshAudits">Refresh</button>
+            <label style="margin-left:8px">Filter action:
+              <input id="auditActionFilter" placeholder="action" style="width:120px;margin-left:6px" />
+            </label>
+            <label style="margin-left:8px">Filter resource:
+              <input id="auditResourceFilter" placeholder="resource" style="width:120px;margin-left:6px" />
+            </label>
+            <button id="exportAudits" style="margin-left:8px">Export JSON</button>
+            <span style="color:#666;margin-left:8px">Shows recent audit events (ADMIN only)</span>
+        </div>
+        <div id="auditList" style="max-height:300px;overflow:auto;border:1px solid #eee;padding:8px;background:#fafafa"></div>
       </section>
 
       <!-- Edit modal -->
@@ -176,6 +225,26 @@
         document.getElementById('editDisplay').value = u.displayName || '';
         document.getElementById('editRole').value = u.role || 'EDITOR';
         document.getElementById('editModal').style.display = 'flex';
+        // Load user-specific audits into modal (if allowed)
+        (async ()=>{
+          try {
+            const r = await api('/api/audit/user/'+id);
+            const containerId = 'userAudits';
+            let container = document.getElementById(containerId);
+            if(!container){
+              container = document.createElement('div');
+              container.id = containerId;
+              container.style.maxHeight = '160px';
+              container.style.overflow = 'auto';
+              container.style.marginTop = '8px';
+              container.style.padding = '8px';
+              container.style.borderTop = '1px solid #eee';
+              document.querySelector('#editModal > div').appendChild(container);
+            }
+            if(!r.ok){ container.innerText = 'No audits or access denied'; return; }
+            container.innerHTML = '<strong>Recent audits for user:</strong>' + r.audits.map(a=>`<div style="border-top:1px dashed #ddd;padding:6px;margin-top:6px"><div><b>${new Date(a.ts).toLocaleString()}</b> — <i>${a.action}</i></div><div style="color:#333">${a.details || ''}</div></div>`).join('');
+          } catch (e) { /* ignore */ }
+        })();
       }
       document.getElementById('cancelEdit').onclick = ()=>{ document.getElementById('editModal').style.display='none'; editingId=null; };
       document.getElementById('saveEdit').onclick = async ()=>{
@@ -189,6 +258,177 @@
       api('/api/me').then(r=>{ if(r.user) { document.getElementById('auth').style.display='none'; document.getElementById('app').style.display='block'; loadMetrics(); } });
       // If logged in, also load users for admins
       api('/api/me').then(r=>{ if(r.user && r.user.role==='ADMIN') loadUsers(); });
+
+      // Audit functions
+      async function loadAudits(){
+        const action = document.getElementById('auditActionFilter').value || '';
+        const resource = document.getElementById('auditResourceFilter').value || '';
+        const params = new URLSearchParams();
+        if (action) params.set('action', action);
+        if (resource) params.set('resource', resource);
+        const r = await api('/api/audit?'+params.toString());
+        const out = document.getElementById('auditList');
+        if(!r.ok){ out.innerText = r.error || JSON.stringify(r); return; }
+        out.innerHTML = r.audits.map(a=>{
+          return `<div style="border-bottom:1px solid #eee;padding:6px"><div><b>${new Date(a.ts).toLocaleString()}</b> — <i>${a.action}</i> by ${a.actorId || 'system'}</div><div style="color:#333">${a.resource} ${a.details || ''}</div></div>`;
+        }).join('');
+      }
+      document.getElementById('exportAudits').onclick = async ()=>{
+        const r = await api('/api/audit');
+        if(!r.ok) return alert('Export failed: '+(r.error||JSON.stringify(r)));
+        const blob = new Blob([JSON.stringify(r.audits, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'audits.json'; a.click();
+        URL.revokeObjectURL(url);
+      }
+
+      // Permissions UI
+      async function renderPerms(perms){
+        const container = document.getElementById('permsTable');
+        if(!perms || perms.length===0){ container.innerHTML = '<div style="color:#666">No permissions defined</div>'; return; }
+        const t = document.createElement('table');
+        t.style.width = '100%';
+        t.style.borderCollapse = 'collapse';
+        t.innerHTML = `<thead><tr><th>Resource</th><th>Action</th><th>Role</th><th>UserId</th><th>Allow</th><th>Actions</th></tr></thead>`;
+        const tb = document.createElement('tbody');
+        perms.forEach(p=>{
+          const tr = document.createElement('tr');
+          tr.style.borderTop = '1px solid #eee';
+          tr.innerHTML = `<td>${p.resource}</td><td>${p.action}</td><td>${p.role||''}</td><td>${p.userId||''}</td><td>${p.allow? 'yes':'no'}</td><td><button data-id="${p.id}" class="delPerm">Delete</button></td>`;
+          tb.appendChild(tr);
+        });
+        t.appendChild(tb);
+        container.innerHTML = '';
+        container.appendChild(t);
+        Array.from(document.getElementsByClassName('delPerm')).forEach(b=> b.onclick = async (ev)=>{
+          const id = Number(ev.target.getAttribute('data-id'));
+          if(!confirm('Delete permission '+id+'?')) return;
+          const r = await api('/api/permissions/'+id,{method:'DELETE'});
+          if(!r.ok) return alert('Delete failed: '+(r.error||JSON.stringify(r)));
+          loadPerms();
+        });
+      }
+
+      async function loadPerms(){
+        const r = await api('/api/permissions');
+        const container = document.getElementById('permsTable');
+        if(!r.ok){ container.innerText = r.error || JSON.stringify(r); return; }
+        renderPerms(r.permissions || []);
+      }
+
+      document.getElementById('refreshPerms').onclick = loadPerms;
+      document.getElementById('createPerm').onclick = async ()=>{
+        const resource = document.getElementById('permResource').value;
+        const action = document.getElementById('permAction').value;
+        const role = document.getElementById('permRole').value || null;
+        const userId = document.getElementById('permUserId').value || null;
+        const allow = document.getElementById('permAllow').checked ? 1 : 0;
+        const r = await api('/api/permissions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({resource,action,role,userId: userId? Number(userId): null, allow})});
+        if(!r.ok){ document.getElementById('permMsg').innerText = r.error || JSON.stringify(r); return; }
+        document.getElementById('permMsg').style.color='green'; document.getElementById('permMsg').innerText = 'Created';
+        document.getElementById('permResource').value=''; document.getElementById('permAction').value=''; document.getElementById('permRole').value=''; document.getElementById('permUserId').value='';
+        loadPerms();
+      }
+
+      // Load perms if admin
+      api('/api/me').then(r=>{ if(r.user && r.user.role==='ADMIN') loadPerms(); });
+
+      // Permission matrix UI
+      const MATRIX_RESOURCES = [
+        { resource: 'metrics', actions: ['read','create','update','delete'] },
+        { resource: 'users', actions: ['read','create','update','delete'] },
+        { resource: 'audits', actions: ['read'] },
+        { resource: 'permissions', actions: ['read','create','delete'] },
+      ];
+      const MATRIX_ROLES = ['ADMIN','EDITOR','VIEWER'];
+      // user override selector
+      const userSelectWrapper = document.createElement('div');
+      userSelectWrapper.style.marginTop = '8px';
+      userSelectWrapper.innerHTML = 'Apply for user: <select id="matrixUserSelect"><option value="">(none)</option></select>';
+      document.getElementById('permMatrix').parentNode.insertBefore(userSelectWrapper, document.getElementById('permMatrix'));
+
+      async function loadMatrixUsers(){
+        const r = await api('/api/users');
+        if(!r.ok) return;
+        const sel = document.getElementById('matrixUserSelect');
+        sel.innerHTML = '<option value="">(none)</option>' + (r.users||[]).map(u=>`<option value="${u.id}">${u.email}</option>`).join('');
+      }
+      loadMatrixUsers();
+
+      function buildMatrix(perms){
+        const container = document.getElementById('permMatrix');
+        container.innerHTML = '';
+        const table = document.createElement('table');
+        table.style.borderCollapse = 'collapse';
+        table.style.width = '100%';
+        const thead = document.createElement('thead');
+        const headerRow = document.createElement('tr');
+        headerRow.innerHTML = `<th style="text-align:left">Resource / Action</th>` + MATRIX_ROLES.map(r=>`<th>${r}</th>`).join('');
+        thead.appendChild(headerRow);
+        table.appendChild(thead);
+        const tbody = document.createElement('tbody');
+        MATRIX_RESOURCES.forEach(rr=>{
+          rr.actions.forEach(act=>{
+            const tr = document.createElement('tr');
+            tr.style.borderTop = '1px solid #eee';
+            const left = document.createElement('td');
+            left.innerText = `${rr.resource} — ${act}`;
+            tr.appendChild(left);
+            MATRIX_ROLES.forEach(role=>{
+              const td = document.createElement('td');
+              td.style.textAlign = 'center';
+              const chk = document.createElement('input');
+              chk.type = 'checkbox';
+              chk.dataset.resource = rr.resource;
+              chk.dataset.action = act;
+              chk.dataset.role = role;
+              // find existing permission
+              const match = (perms || []).find(p => p.resource === rr.resource && p.action === act && p.role === role);
+              chk.checked = !!(match && match.allow);
+              td.appendChild(chk);
+              tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+          });
+        });
+        table.appendChild(tbody);
+        container.appendChild(table);
+      }
+
+      async function loadMatrix(){
+        const r = await api('/api/permissions');
+        if(!r.ok) return document.getElementById('permMatrix').innerText = r.error || JSON.stringify(r);
+        buildMatrix(r.permissions || []);
+        // if a user is selected, apply user-specific overrides
+        const uid = document.getElementById('matrixUserSelect').value;
+        if (uid) {
+          const userPerms = (r.permissions||[]).filter(p => p.userId === Number(uid));
+          // mark checkboxes based on user-specific perms when present
+          Array.from(document.querySelectorAll('#permMatrix input[type=checkbox]')).forEach(c=>{
+            const res = c.dataset.resource, act = c.dataset.action, role = c.dataset.role;
+            const match = userPerms.find(p=>p.resource===res && p.action===act && (p.role===role || p.userId===Number(uid)));
+            if (match && match.userId) c.checked = !!match.allow;
+          });
+        }
+      }
+
+      document.getElementById('applyMatrix').onclick = async ()=>{
+        const checks = Array.from(document.querySelectorAll('#permMatrix input[type=checkbox]'));
+        const uid = document.getElementById('matrixUserSelect').value || null;
+        const entries = checks.map(c=>({ resource: c.dataset.resource, action: c.dataset.action, role: c.dataset.role, userId: uid ? Number(uid) : null, allow: c.checked ? 1 : 0 }));
+        const r = await api('/api/permissions/bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ entries })});
+        if(!r.ok) return alert('Apply failed: '+(r.error||JSON.stringify(r)));
+        alert('Permission matrix applied');
+        loadPerms();
+        loadMatrix();
+      };
+
+      // Load matrix if admin
+      api('/api/me').then(r=>{ if(r.user && r.user.role==='ADMIN') loadMatrix(); });
+      document.getElementById('refreshAudits').onclick = loadAudits;
+      // If admin, load audits on start
+      api('/api/me').then(r=>{ if(r.user && r.user.role==='ADMIN') loadAudits(); });
     </script>
   </body>
 </html>

@@ -53,5 +53,41 @@ Endpoints
 Notes
 - For development the server falls back to an in-memory session store when `REDIS_URL` is not set.
 - Admin UI is currently disabled; it can be re-enabled once AdminJS compatibility is resolved for your Node version.
+ 
+## New features added
+
+- Per-resource permission storage in SQLite `permissions` table.
+- Runtime `requirePermission(resource, action)` middleware in `lib/rbac.js`.
+- CLI helper `bin/cli.js` with `create-admin`, `migrate`, and `list-perms` commands.
+- Audit viewer improvements: filtering and JSON export in `admin/index.html`.
+
+## CLI usage
+
+Run the local CLI via npm script:
+
+```bash
+npm run cli -- migrate
+npm run cli -- create-admin --email admin@local --password password
+npm run cli -- list-perms
+```
+
+Note: the CLI requires Node and the workspace dependencies installed.
+
+## GitHub OAuth
+
+To enable GitHub OAuth set these environment variables (example):
+
+```bash
+export GITHUB_CLIENT_ID=your_client_id
+export GITHUB_CLIENT_SECRET=your_client_secret
+# Optional, defaults to http://localhost:3000
+export BASE_URL=https://your-domain.example
+```
+
+Then restart the server. OAuth routes available when configured:
+- `/auth/github` — start GitHub login
+- `/auth/github/callback` — OAuth redirect URI
+
+On successful login the user will be created (if missing) with `EDITOR` role by default.
 # TPRM
 # TPRM

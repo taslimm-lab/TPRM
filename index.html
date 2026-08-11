@@ -1788,9 +1788,28 @@ function toast(m) {
 }
 function closeM(id) { document.getElementById(id).classList.remove('open'); }
 function mkChart(id,cfg) {
-  if(charts[id]) charts[id].destroy();
-  const c=document.getElementById(id); if(!c) return;
-  charts[id]=new Chart(c,cfg);
+  if (typeof Chart === 'undefined') {
+    // Chart.js not available in global scope — attempt to load from CDN once,
+    // then retry creating the chart. This prevents the whole page from
+    // failing when the bundled Chart script doesn't initialize.
+    const cdn = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js';
+    if (!document.getElementById('chartjs-cdn')) {
+      console.warn('Chart.js missing — loading from CDN', cdn);
+      const s = document.createElement('script');
+      s.id = 'chartjs-cdn';
+      s.src = cdn;
+      s.onload = () => { try { mkChart(id, cfg); } catch (e) { console.error('mkChart retry failed', e); } };
+      s.onerror = () => { console.error('Failed to load Chart.js from CDN'); };
+      document.head.appendChild(s);
+    } else {
+      // Already loading — try again shortly
+      setTimeout(() => mkChart(id, cfg), 150);
+    }
+    return;
+  }
+  if (charts[id]) charts[id].destroy();
+  const c = document.getElementById(id); if (!c) return;
+  charts[id] = new Chart(c, cfg);
 }
 function lvlBadge(lvl) {
   const m={
